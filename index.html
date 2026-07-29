@@ -65,6 +65,7 @@
       transition: background 0.15s;
     }
     .add-btn:hover { background: #5568d3; }
+    .add-btn:disabled { background: #b2bec3; cursor: default; }
     ul {
       list-style: none;
       padding: 0 24px 24px;
@@ -114,6 +115,13 @@
       padding: 24px;
       font-size: 0.95rem;
     }
+    .status {
+      text-align: center;
+      color: #ff7675;
+      padding: 0 24px 16px;
+      font-size: 0.85rem;
+      min-height: 1.2em;
+    }
   </style>
 </head>
 <body>
@@ -126,51 +134,99 @@
       <input type="text" id="itemInput" placeholder="살 물건을 입력하세요" autocomplete="off">
       <button class="add-btn" id="addBtn">추가</button>
     </div>
+    <div class="status" id="status"></div>
     <ul id="list"></ul>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    const STORAGE_KEY = 'shopping-list-items';
+    // Supabase 연동 설정
+    const SUPABASE_URL = 'https://pdlaaofjbpwugyxumtji.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_W5aRW33ufbNzBSZY8fb61w_SUDPX9T5';
+    const TABLE = 'shopping_items';
+    const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
     const listEl = document.getElementById('list');
     const inputEl = document.getElementById('itemInput');
     const addBtn = document.getElementById('addBtn');
     const countEl = document.getElementById('count');
+    const statusEl = document.getElementById('status');
 
-    let items = load();
+    let items = [];
 
-    function load() {
-      try {
-        return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-      } catch {
-        return [];
+    function setStatus(msg) {
+      statusEl.textContent = msg || '';
+    }
+
+    // 데이터베이스에서 전체 목록을 불러온다
+    async function load() {
+      setStatus('불러오는 중…');
+      const { data, error } = await db
+        .from(TABLE)
+        .select('*')
+        .order('created_at', { ascending: true });
+      if (error) {
+        setStatus('불러오기 실패: ' + error.message);
+        return;
+      }
+      items = data || [];
+      setStatus('');
+      render();
+    }
+
+    // 항목 추가 → DB에 저장
+    async function addItem() {
+      const text = inputEl.value.trim();
+      if (!text) return;
+      addBtn.disabled = true;
+      const { data, error } = await db
+        .from(TABLE)
+        .insert({ text, checked: false })
+        .select()
+        .single();
+      addBtn.disabled = false;
+      if (error) {
+        setStatus('추가 실패: ' + error.message);
+        return;
+      }
+      items.push(data);
+      inputEl.value = '';
+      inputEl.focus();
+      render();
+    }
+
+    // 체크 상태 토글 → DB 업데이트
+    async function toggleItem(id) {
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      const newChecked = !item.checked;
+      item.checked = newChecked; // 낙관적 업데이트
+      render();
+      const { error } = await db
+        .from(TABLE)
+        .update({ checked: newChecked })
+        .eq('id', id);
+      if (error) {
+        item.checked = !newChecked; // 롤백
+        setStatus('업데이트 실패: ' + error.message);
+        render();
       }
     }
 
-    function save() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    }
-
-    function addItem() {
-      const text = inputEl.value.trim();
-      if (!text) return;
-      items.push({ id: Date.now(), text, checked: false });
-      inputEl.value = '';
-      inputEl.focus();
-      save();
+    // 항목 삭제 → DB에서 삭제
+    async function deleteItem(id) {
+      const prev = items;
+      items = items.filter(i => i.id !== id); // 낙관적 업데이트
       render();
-    }
-
-    function toggleItem(id) {
-      const item = items.find(i => i.id === id);
-      if (item) item.checked = !item.checked;
-      save();
-      render();
-    }
-
-    function deleteItem(id) {
-      items = items.filter(i => i.id !== id);
-      save();
-      render();
+      const { error } = await db
+        .from(TABLE)
+        .delete()
+        .eq('id', id);
+      if (error) {
+        items = prev; // 롤백
+        setStatus('삭제 실패: ' + error.message);
+        render();
+      }
     }
 
     function render() {
@@ -216,7 +272,7 @@
       if (e.key === 'Enter') addItem();
     });
 
-    render();
+    load();
   </script>
 </body>
 </html>
